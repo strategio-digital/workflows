@@ -1,0 +1,10 @@
+name: probe
+
+on:
+  workflow_call:
+
+jobs:
+  probe:
+    runs-on: [self-hosted, ops-1]
+    steps:
+      - run: echo "runner=$RUNNER_NAME repo=$GITHUB_REPOSITORY"
