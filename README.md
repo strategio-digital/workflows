@@ -78,6 +78,7 @@ secrets:
 ```
 
 - The deploy creates the secret `<stack>_<name>-<hash of the value>`, so a new value deploys as a new secret.
+- `x-optional: true` next to `x-environment` makes the secret optional: without the repository secret, the deploy leaves it out of the stack and the variable stays unset.
 - The entrypoint above exports every file of `/run/secrets` as a variable of the same name and runs the original command. It works for any image with `sh`, so the app needs no `_FILE` support. Overriding the entrypoint drops the image's command, so the wrapper names it.
 - Secrets shared by all projects (the backup key) are created in the infra repo with the prefix `shared-` and declared as `external: true`.
 - Once a stack uses `x-environment`, the deploy fails when the value of any repository secret still appears in the rendered compose. Stacks without it get a warning.

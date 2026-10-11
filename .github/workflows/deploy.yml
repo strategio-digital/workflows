@@ -155,12 +155,18 @@ jobs:
                   mounts.append({"source": base, "target": target})
               service["secrets"] = mounts
           migrated = False
-          for name, item in (compose.get("secrets") or {}).items():
+          dropped = set()
+          for name, item in list((compose.get("secrets") or {}).items()):
               source = item.pop("x-environment", None)
+              optional = item.pop("x-optional", False)
               if source is None:
                   continue
               migrated = True
               value = env.get(source)
+              if not value and optional:
+                  del compose["secrets"][name]
+                  dropped.add(name)
+                  continue
               if not value:
                   errors.append(f"secret {name} wants {source}, which is not a repository secret")
                   continue
@@ -171,6 +177,10 @@ jobs:
                       errors.append(f"secret {name} could not be created: {created.stderr.strip()}")
                       continue
               compose["secrets"][name] = {"external": True, "name": secret}
+
+          for service in (compose.get("services") or {}).values():
+              if service.get("secrets"):
+                  service["secrets"] = [mount for mount in service["secrets"] if mount.get("source") not in dropped]
 
           for kind in ("configs", "secrets"):
               for name, item in (compose.get(kind) or {}).items():
