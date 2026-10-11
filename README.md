@@ -79,6 +79,13 @@ secrets:
 - Secrets shared by all projects (the backup key) are created in the infra repo with the prefix `shared-` and declared as `external: true`.
 - Once a stack uses `x-environment`, the deploy fails when the value of any repository secret still appears in the rendered compose. Stacks without it get a warning.
 
+### Backups
+
+A Postgres service with the label `backup: pgbackrest` (under `deploy.labels`) and the image `registry.strategio.dev/strategio-digital/postgres` from the infra repo gets point-in-time backups to R2:
+
+- the deploy sets `PGBACKREST_REPO1_PATH` to `/<stack>/<service>`, whatever the compose says, so no project writes into another project's path;
+- it mounts the latest `shared-r2-backups-access-key-id-v<n>`, `shared-r2-backups-secret-access-key-v<n>` and `shared-backups-cipher-pass-v<n>` into that service only.
+
 ### What the deploy checks and changes
 
 - The image of the commit must be in the registry.
