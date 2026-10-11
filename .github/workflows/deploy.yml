@@ -187,7 +187,7 @@ jobs:
           deployed = subprocess.run(
               ["docker", "stack", "deploy", "--detach=false", "--prune", "--with-registry-auth",
                "--compose-file", "-", stack],
-              input=json.dumps(compose), env=env, text=True,
+              input=json.dumps(compose).replace("$", "$$"), env=env, text=True,
           )
           del compose
 
