@@ -1,6 +1,6 @@
 # Strategio workflows
 
-Reusable GitHub Actions workflows that build images and deploy stacks to the Strategio Docker Swarm. They run on the self-hosted runners of the organization on `ops-1`, which hold the registry login and the Docker socket of a Swarm manager. The repository is public so that every organization can call it; it contains no secrets.
+Reusable GitHub Actions workflows that build images and deploy stacks to the Strategio Docker Swarm. They run on the self-hosted runners of the organization on `ops-1`, which hold the registry login and the Docker socket of a Swarm manager. The repository is private and shared with the repositories of `strategio-digital` (Settings → Actions → General → Access); repositories of other organizations can't call it.
 
 ## Build
 
@@ -55,7 +55,29 @@ Inputs: `version`, `compose`, `stack` (default the repository name) and `role` (
 ### What the compose gets
 
 - `IMAGE`, `VERSION`, `STACK` and `ROLE` (place services with `node.labels.role == ${ROLE}`).
-- Every repository variable and secret, by its name. The values end up in the service spec, so `docker service inspect` on a manager shows them.
+- Every repository variable and secret, by its name, for `${…}` interpolation. Use it for configuration only: a value interpolated into `environment` ends up in the service spec, where `docker service inspect` shows it.
+
+### Secrets
+
+A repository secret becomes a Docker secret through `x-environment`:
+
+```yaml
+services:
+  app:
+    entrypoint: ["/bin/sh", "-c", "for f in /run/secrets/*; do [ -f \"$$f\" ] && export \"$${f##*/}=$$(cat \"$$f\")\"; done; exec /app/gokick"]
+    secrets:
+      - source: db-password
+        target: DB_PASSWORD
+
+secrets:
+  db-password:
+    x-environment: DB_PASSWORD
+```
+
+- The deploy creates the secret `<stack>_<name>-<hash of the value>`, so a new value deploys as a new secret.
+- The entrypoint above exports every file of `/run/secrets` as a variable of the same name and runs the original command. It works for any image with `sh`, so the app needs no `_FILE` support. Overriding the entrypoint drops the image's command, so the wrapper names it.
+- Secrets shared by all projects (the backup key) are created in the infra repo with the prefix `shared-` and declared as `external: true`.
+- Once a stack uses `x-environment`, the deploy fails when the value of any repository secret still appears in the rendered compose. Stacks without it get a warning.
 
 ### What the deploy checks and changes
 
@@ -64,4 +86,5 @@ Inputs: `version`, `compose`, `stack` (default the repository name) and `role` (
 - Every network of the stack is an overlay with MTU 1400, which the private network between the servers needs. A service without networks gets the stack's `default` network.
 - Configs and secrets from files get a name with the hash of their content, so a changed file deploys as a new config instead of failing.
 - The run fails when a service rolled back or paused during this deploy, or runs fewer replicas than desired. Give services a healthcheck and `update_config` with `failure_action: rollback`, so a broken version never replaces the running one.
+- Every service gets the label `com.strategio.repository`. A stack of the same name that belongs to another repository refuses the deploy, so two projects never overwrite each other's stack, volumes or backups.
 - One deploy per repository runs at a time.

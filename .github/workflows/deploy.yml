@@ -54,12 +54,25 @@ jobs:
           version = os.environ["VERSION"]
           image = f"registry.strategio.dev/{os.environ['GITHUB_REPOSITORY'].lower()}:{version}"
 
+          repository = os.environ["GITHUB_REPOSITORY"]
           env = dict(os.environ)
+          secret_values = {}
           for source in ("REPO_VARS", "REPO_SECRETS"):
               values = json.loads(env.pop(source) or "{}") or {}
               values.pop("github_token", None)
-              env.update({key: str(value) for key, value in values.items()})
+              values = {key: str(value) for key, value in values.items()}
+              if source == "REPO_SECRETS":
+                  secret_values = values
+              env.update(values)
           env.update(STACK=stack, VERSION=version, IMAGE=image)
+
+          def docker(*args, stdin=None):
+              return subprocess.run(["docker", *args], input=stdin, capture_output=True, text=True)
+
+          for line in docker("service", "ls", "--filter", f"label=com.docker.stack.namespace={stack}", "--format", "{{.Name}}").stdout.split():
+              owner = docker("service", "inspect", "--format", '{{index .Spec.Labels "com.strategio.repository"}}', line).stdout.strip()
+              if owner not in ("", "<no value>") and owner != repository:
+                  fail(f"stack {stack} belongs to {owner}; choose another stack name")
 
           if subprocess.run(["docker", "manifest", "inspect", image], capture_output=True).returncode != 0:
               fail(f"{image} is not in the registry; build the commit first")
@@ -110,10 +123,32 @@ jobs:
                   service["networks"] = {"default": None}
                   networks.setdefault("default", dict(overlay))
 
+          existing = set(docker("secret", "ls", "--format", "{{.Name}}").stdout.split())
+          migrated = False
+          for name, item in (compose.get("secrets") or {}).items():
+              source = item.pop("x-environment", None)
+              if source is None:
+                  continue
+              migrated = True
+              value = env.get(source)
+              if not value:
+                  errors.append(f"secret {name} wants {source}, which is not a repository secret")
+                  continue
+              secret = f"{prefix}{name}-{hashlib.sha256(value.encode()).hexdigest()[:12]}"
+              if secret not in existing:
+                  created = docker("secret", "create", "--label", f"com.strategio.repository={repository}", secret, "-", stdin=value)
+                  if created.returncode != 0:
+                      errors.append(f"secret {name} could not be created: {created.stderr.strip()}")
+                      continue
+              compose["secrets"][name] = {"external": True, "name": secret}
+
           for kind in ("configs", "secrets"):
               for name, item in (compose.get(kind) or {}).items():
                   if item.get("external"):
-                      errors.append(f"{kind[:-1]} {name} is external")
+                      shared = kind == "secrets" and str(item.get("name", name)).startswith("shared-")
+                      generated = kind == "secrets" and str(item.get("name", "")).startswith(prefix)
+                      if not (shared or generated):
+                          errors.append(f"{kind[:-1]} {name} is external; only shared- secrets are allowed")
                       continue
                   if "name" in item:
                       if not str(item["name"]).startswith(prefix):
@@ -125,6 +160,23 @@ jobs:
                   with open(item["file"], "rb") as handle:
                       digest = hashlib.sha256(handle.read()).hexdigest()[:12]
                   item["name"] = f"{prefix}{name}-{digest}"
+
+          for name, service in (compose.get("services") or {}).items():
+              deploy = service.setdefault("deploy", {})
+              labels = deploy.get("labels") or {}
+              if isinstance(labels, list):
+                  labels = dict(label.split("=", 1) for label in labels)
+              labels["com.strategio.repository"] = repository
+              deploy["labels"] = labels
+
+          rendered_json = json.dumps(compose)
+          leaked = sorted(key for key, value in secret_values.items() if len(value) >= 8 and value in rendered_json)
+          del rendered_json
+          for key in leaked:
+              if migrated:
+                  errors.append(f"the value of {key} ends up in the service spec; pass it through x-environment instead")
+              else:
+                  print(f"::warning::the value of {key} ends up in the service spec; move it to a secret with x-environment")
 
           if errors:
               for error in errors:
