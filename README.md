@@ -1,0 +1,67 @@
+# Strategio workflows
+
+Reusable GitHub Actions workflows that build images and deploy stacks to the Strategio Docker Swarm. They run on the self-hosted runners of the organization on `ops-1`, which hold the registry login and the Docker socket of a Swarm manager. The repository is public so that every organization can call it; it contains no secrets.
+
+## Build
+
+Builds `docker/production/Dockerfile` on every push to `main` and pushes `registry.strategio.dev/<owner>/<repo>:<commit>`.
+
+```yaml
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: strategio-digital/workflows/.github/workflows/build.yml@v1
+```
+
+Inputs: `dockerfile` (default `docker/production/Dockerfile`) and `context` (default `.`). The build cache older than a week is pruned after each build.
+
+## Deploy
+
+Deploys the stack from `docker/production/compose.yaml` at the chosen commit, with the image of the same commit. The Run workflow button in the Actions tab starts it; an empty version deploys the head of the chosen branch, and an older commit rolls back.
+
+```yaml
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Commit to deploy, empty for the head of the branch
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    uses: strategio-digital/workflows/.github/workflows/deploy.yml@v1
+    with:
+      version: ${{ inputs.version }}
+    secrets: inherit
+```
+
+Inputs: `version`, `compose`, `stack` (default the repository name) and `role` (default `app`).
+
+### What the compose gets
+
+- `IMAGE`, `VERSION`, `STACK` and `ROLE` (place services with `node.labels.role == ${ROLE}`).
+- Every repository variable and secret, by its name. The values end up in the service spec, so `docker service inspect` on a manager shows them.
+
+### What the deploy checks and changes
+
+- The image of the commit must be in the registry.
+- Refused: external volumes, external networks other than `edge`, external configs and secrets, bind mounts, `network_mode`, and names of volumes, networks, configs and secrets outside the stack prefix.
+- Every network of the stack is an overlay with MTU 1400, which the private network between the servers needs. A service without networks gets the stack's `default` network.
+- Configs and secrets from files get a name with the hash of their content, so a changed file deploys as a new config instead of failing.
+- The run fails when a service rolled back or paused during this deploy, or runs fewer replicas than desired. Give services a healthcheck and `update_config` with `failure_action: rollback`, so a broken version never replaces the running one.
+- One deploy per repository runs at a time.

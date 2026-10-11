@@ -1,0 +1,51 @@
+name: build
+
+on:
+  workflow_call:
+    inputs:
+      dockerfile:
+        description: Dockerfile of the image
+        type: string
+        default: docker/production/Dockerfile
+      context:
+        description: Build context
+        type: string
+        default: .
+    outputs:
+      image:
+        description: The pushed image
+        value: ${{ jobs.build.outputs.image }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: [self-hosted, ops-1]
+    concurrency:
+      group: build-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: true
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - id: build
+        env:
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          CONTEXT: ${{ inputs.context }}
+        run: |
+          image="registry.strategio.dev/${GITHUB_REPOSITORY,,}:$GITHUB_SHA"
+          docker build --pull \
+            --file "$DOCKERFILE" \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --tag "$image" \
+            "$CONTEXT"
+          docker push "$image"
+          docker image rm "$image" >/dev/null || true
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "Built and pushed \`$image\`." >> "$GITHUB_STEP_SUMMARY"
+
+      - if: always()
+        run: docker builder prune --force --filter until=168h >/dev/null

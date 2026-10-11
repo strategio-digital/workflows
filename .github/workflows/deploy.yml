@@ -1,0 +1,172 @@
+name: deploy
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Commit whose image and compose to deploy; empty deploys the commit of the run
+        type: string
+        default: ""
+      compose:
+        description: Compose file of the stack
+        type: string
+        default: docker/production/compose.yaml
+      stack:
+        description: Swarm stack; empty takes the repository name
+        type: string
+        default: ""
+      role:
+        description: Value of node.labels.role the services run on, passed to the compose as ROLE
+        type: string
+        default: app
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, ops-1]
+    concurrency:
+      group: deploy-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.version || github.sha }}
+
+      - shell: python3 -u {0}
+        env:
+          REPO_SECRETS: ${{ toJSON(secrets) }}
+          REPO_VARS: ${{ toJSON(vars) }}
+          VERSION: ${{ inputs.version || github.sha }}
+          STACK: ${{ inputs.stack || github.event.repository.name }}
+          ROLE: ${{ inputs.role }}
+          COMPOSE: ${{ inputs.compose }}
+        run: |
+          import hashlib, json, os, subprocess, sys, time
+          from datetime import datetime, timezone
+
+          def fail(message):
+              print(f"::error::{message}")
+              sys.exit(1)
+
+          stack = os.environ["STACK"].lower()
+          version = os.environ["VERSION"]
+          image = f"registry.strategio.dev/{os.environ['GITHUB_REPOSITORY'].lower()}:{version}"
+
+          env = dict(os.environ)
+          for source in ("REPO_VARS", "REPO_SECRETS"):
+              values = json.loads(env.pop(source) or "{}") or {}
+              values.pop("github_token", None)
+              env.update({key: str(value) for key, value in values.items()})
+          env.update(STACK=stack, VERSION=version, IMAGE=image)
+
+          if subprocess.run(["docker", "manifest", "inspect", image], capture_output=True).returncode != 0:
+              fail(f"{image} is not in the registry; build the commit first")
+
+          rendered = subprocess.run(
+              ["docker", "stack", "config", "--compose-file", env["COMPOSE"]],
+              env=env, capture_output=True, text=True,
+          )
+          if rendered.returncode != 0:
+              fail(f"docker stack config failed: {rendered.stderr.strip()}")
+          converted = subprocess.run(["yq", "-o=json"], input=rendered.stdout, capture_output=True, text=True)
+          if converted.returncode != 0:
+              fail("yq could not read the rendered compose")
+          compose = json.loads(converted.stdout)
+          del rendered, converted
+
+          errors = []
+          prefix = f"{stack}_"
+          overlay = {"driver": "overlay", "driver_opts": {"com.docker.network.driver.mtu": "1400"}}
+
+          for name, volume in (compose.get("volumes") or {}).items():
+              volume = volume or {}
+              if volume.get("external"):
+                  errors.append(f"volume {name} is external")
+              if "name" in volume and not str(volume["name"]).startswith(prefix):
+                  errors.append(f"volume {name} has a name outside {prefix}")
+
+          networks = compose.setdefault("networks", {})
+          for name, network in list(networks.items()):
+              network = network or {}
+              if network.get("external"):
+                  if network.get("name", name) != "edge":
+                      errors.append(f"network {name} is external; only edge is allowed")
+                  continue
+              if "name" in network and not str(network["name"]).startswith(prefix):
+                  errors.append(f"network {name} has a name outside {prefix}")
+              network.setdefault("driver", "overlay")
+              network.setdefault("driver_opts", {}).setdefault("com.docker.network.driver.mtu", "1400")
+              networks[name] = network
+
+          for name, service in (compose.get("services") or {}).items():
+              if "network_mode" in service:
+                  errors.append(f"service {name} sets network_mode")
+              for mount in service.get("volumes") or []:
+                  if mount.get("type") not in ("volume", "tmpfs"):
+                      errors.append(f"service {name} mounts {mount.get('type')} at {mount.get('target')}")
+              if not service.get("networks"):
+                  service["networks"] = {"default": None}
+                  networks.setdefault("default", dict(overlay))
+
+          for kind in ("configs", "secrets"):
+              for name, item in (compose.get(kind) or {}).items():
+                  if item.get("external"):
+                      errors.append(f"{kind[:-1]} {name} is external")
+                      continue
+                  if "name" in item:
+                      if not str(item["name"]).startswith(prefix):
+                          errors.append(f"{kind[:-1]} {name} has a name outside {prefix}")
+                      continue
+                  if "file" not in item:
+                      errors.append(f"{kind[:-1]} {name} has no file")
+                      continue
+                  with open(item["file"], "rb") as handle:
+                      digest = hashlib.sha256(handle.read()).hexdigest()[:12]
+                  item["name"] = f"{prefix}{name}-{digest}"
+
+          if errors:
+              for error in errors:
+                  print(f"::error::{error}")
+              sys.exit(1)
+
+          started = time.time()
+          deployed = subprocess.run(
+              ["docker", "stack", "deploy", "--detach=false", "--prune", "--with-registry-auth",
+               "--compose-file", "-", stack],
+              input=json.dumps(compose), env=env, text=True,
+          )
+          del compose
+
+          services = subprocess.run(
+              ["docker", "service", "ls", "--filter", f"label=com.docker.stack.namespace={stack}",
+               "--format", "{{.Name}}\t{{.Replicas}}"],
+              capture_output=True, text=True, check=True,
+          ).stdout.splitlines()
+
+          summary = [f"Deployed `{image}` as stack `{stack}`.", "", "| Service | Replicas | Update |", "| --- | --- | --- |"]
+          broken = deployed.returncode != 0
+          for line in services:
+              service, replicas = line.split("\t")
+              status = json.loads(subprocess.run(
+                  ["docker", "service", "inspect", "--format", "{{json .UpdateStatus}}", service],
+                  capture_output=True, text=True, check=True,
+              ).stdout or "null") or {}
+              state = status.get("State", "")
+              begun = status.get("StartedAt", "")[:19]
+              fresh = bool(state and begun) and datetime.fromisoformat(begun).replace(tzinfo=timezone.utc).timestamp() >= started - 5
+              if fresh and state in ("rollback_started", "rollback_paused", "rollback_completed", "paused"):
+                  broken = True
+                  print(f"::error::{service}: {state} ({status.get('Message', '')})")
+              running, desired = replicas.split(" ")[0].split("/")
+              if running != desired:
+                  broken = True
+                  print(f"::error::{service} runs {running} of {desired} replicas")
+              summary.append(f"| {service} | {replicas} | {state if fresh else 'unchanged'} |")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as handle:
+              handle.write("\n".join(summary) + "\n")
+
+          if broken:
+              fail("the deploy did not converge; Swarm keeps or restored the previous version")
