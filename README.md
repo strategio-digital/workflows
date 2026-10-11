@@ -23,7 +23,10 @@ jobs:
     uses: strategio-digital/workflows/.github/workflows/build.yml@v1
 ```
 
-Inputs: `dockerfile` (default `docker/production/Dockerfile`) and `context` (default `.`). The build cache older than a week is pruned after each build.
+Inputs: `dockerfile` (default `docker/production/Dockerfile`) and `context` (default `.`).
+
+- Builds run in the buildx builder `limited`, a BuildKit container on ops-1 capped at 3 CPUs and 5 GB of RAM, so a build never takes the last core and the memory of the registry and the Swarm manager. The first build creates it, every runner then shares it and its cache.
+- After each build, cache older than a week goes, and the cache never grows past 20 GB.
 
 ## Deploy
 

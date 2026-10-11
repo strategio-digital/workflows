@@ -36,16 +36,17 @@ jobs:
           CONTEXT: ${{ inputs.context }}
         run: |
           image="registry.strategio.dev/${GITHUB_REPOSITORY,,}:$GITHUB_SHA"
-          docker build --pull \
+          docker buildx inspect limited >/dev/null 2>&1 ||
+            docker buildx create --name limited --driver docker-container \
+              --driver-opt memory=5g,memory-swap=5g,cpu-period=100000,cpu-quota=300000,restart-policy=unless-stopped >/dev/null
+          docker buildx build --builder limited --pull --push \
             --file "$DOCKERFILE" \
             --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --tag "$image" \
             "$CONTEXT"
-          docker push "$image"
-          docker image rm "$image" >/dev/null || true
           echo "image=$image" >> "$GITHUB_OUTPUT"
           echo "Built and pushed \`$image\`." >> "$GITHUB_STEP_SUMMARY"
 
       - if: always()
-        run: docker builder prune --force --filter until=168h >/dev/null
+        run: docker buildx prune --builder limited --force --filter until=168h --max-used-space 20GB >/dev/null
