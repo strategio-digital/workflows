@@ -21,9 +21,12 @@ permissions:
 jobs:
   build:
     uses: strategio-digital/workflows/.github/workflows/build.yml@v1
+    secrets: inherit
 ```
 
 Inputs: `dockerfile` (default `docker/production/Dockerfile`) and `context` (default `.`).
+
+- **Build arguments and secrets come from the repository, as the Dockerfile names them.** A repository variable named by an `ARG` becomes a build argument of the same name. A repository secret named by the `id` of a `--mount=type=secret` becomes that build secret, which only the `RUN` with the mount reads and which never lands in a layer. The rest stays out of the build, and the summary of the run lists the names it passed. Secrets need `secrets: inherit` in the caller.
 
 - Builds run in the buildx builder `limited`, a BuildKit container on ops-1 capped at 3 CPUs and 5 GB of RAM, so a build never takes the last core and the memory of the registry and the Swarm manager. The first build creates it, every runner then shares it and its cache.
 - After each build, cache older than a week goes, and the cache never grows past 20 GB.
