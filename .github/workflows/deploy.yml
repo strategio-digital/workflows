@@ -257,6 +257,46 @@ jobs:
                   print(f"::error::{service} runs {running} of {desired} replicas")
               summary.append(f"| {service} | {replicas} | {state if fresh else 'unchanged'} |")
 
+          def redact(text):
+              for value in secret_values.values():
+                  if len(value) >= 8:
+                      text = text.replace(value, "***")
+              return text
+
+          def failed_tasks(service):
+              ids = docker("service", "ps", "--quiet", "--no-trunc", service).stdout.split()
+              if not ids:
+                  return []
+              tasks = json.loads(docker("inspect", "--type", "task", *ids).stdout or "[]")
+              ended = [
+                  task for task in tasks
+                  if task["Status"]["State"] in ("failed", "rejected", "shutdown", "complete", "orphaned")
+                  and datetime.fromisoformat(task["CreatedAt"][:19]).replace(tzinfo=timezone.utc).timestamp() >= started - 5
+              ]
+              return sorted(ended, key=lambda task: task["CreatedAt"], reverse=True)[:3]
+
+          if broken:
+              for line in services:
+                  service = line.split("\t")[0]
+                  for task in failed_tasks(service):
+                      state = task["Status"]
+                      title = f"{service}.{task.get('Slot') or task['NodeID']} {state['State']}: {state.get('Err') or state.get('Message', '')}"
+                      try:
+                          logs = subprocess.run(
+                              ["docker", "service", "logs", "--raw", "--tail", "60", task["ID"]],
+                              capture_output=True, text=True, timeout=30,
+                          )
+                          output = redact((logs.stdout + logs.stderr).strip())
+                      except subprocess.TimeoutExpired:
+                          output = "(docker service logs timed out)"
+                      if not output and not state.get("Err"):
+                          continue
+                      output = output or "(the task wrote nothing)"
+                      print(f"::error::{redact(title)}")
+                      print(f"Last lines of {task['ID'][:12]}:")
+                      print(output)
+                      summary += ["", f"**{redact(title)}**", "", "```text", *output.splitlines()[-20:], "```"]
+
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as handle:
               handle.write("\n".join(summary) + "\n")
 
