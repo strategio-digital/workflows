@@ -11,6 +11,10 @@ on:
         description: Build context
         type: string
         default: .
+      version:
+        description: Commit to build, empty for the commit of the run
+        type: string
+        default: ""
     outputs:
       image:
         description: The pushed image
@@ -29,12 +33,15 @@ jobs:
       image: ${{ steps.build.outputs.image }}
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.version || github.sha }}
 
       - id: build
         shell: python3 -u {0}
         env:
           DOCKERFILE: ${{ inputs.dockerfile }}
           CONTEXT: ${{ inputs.context }}
+          VERSION: ${{ inputs.version || github.sha }}
           REPO_SECRETS: ${{ toJSON(secrets) }}
           REPO_VARS: ${{ toJSON(vars) }}
         run: |
@@ -72,13 +79,13 @@ jobs:
                   check=True, stdout=subprocess.DEVNULL,
               )
 
-          image = f"registry.strategio.dev/{env['GITHUB_REPOSITORY'].lower()}:{env['GITHUB_SHA']}"
+          image = f"registry.strategio.dev/{env['GITHUB_REPOSITORY'].lower()}:{env['VERSION']}"
           source = f"{env['GITHUB_SERVER_URL']}/{env['GITHUB_REPOSITORY']}"
           built = subprocess.run(
               ["docker", "buildx", "build", "--builder", "limited", "--pull", "--push",
                "--file", env["DOCKERFILE"],
                "--label", f"org.opencontainers.image.source={source}",
-               "--label", f"org.opencontainers.image.revision={env['GITHUB_SHA']}",
+               "--label", f"org.opencontainers.image.revision={env['VERSION']}",
                "--tag", image, *flags, env["CONTEXT"]],
               env=env,
           )
