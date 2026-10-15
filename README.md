@@ -24,7 +24,7 @@ jobs:
     secrets: inherit
 ```
 
-Inputs: `dockerfile` (default `docker/production/Dockerfile`) and `context` (default `.`).
+Inputs: `dockerfile` (default `docker/production/Dockerfile`), `context` (default `.`) and `version`, the commit to build (default the commit of the run). A workflow that commits and then builds in the same run, like a scheduled sync, passes the new commit as `version`, because the run itself still points to the commit it started on.
 
 - **Build arguments and secrets come from the repository, as the Dockerfile names them.** A repository variable named by an `ARG` becomes a build argument of the same name. A repository secret named by the `id` of a `--mount=type=secret` becomes that build secret, which only the `RUN` with the mount reads and which never lands in a layer. The rest stays out of the build, and the summary of the run lists the names it passed. Secrets need `secrets: inherit` in the caller.
 
@@ -56,7 +56,7 @@ jobs:
     secrets: inherit
 ```
 
-Inputs: `version`, `compose`, `stack` (default the repository name) and `role` (default `app`).
+Inputs: `version`, `compose`, `stack` (default the repository name, also under `schedule`, whose event carries no repository) and `role` (default `app`).
 
 ### What the compose gets
 

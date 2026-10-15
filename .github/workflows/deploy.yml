@@ -50,7 +50,7 @@ jobs:
               print(f"::error::{message}")
               sys.exit(1)
 
-          stack = os.environ["STACK"].lower()
+          stack = (os.environ["STACK"] or os.environ["GITHUB_REPOSITORY"].split("/", 1)[1]).lower()
           version = os.environ["VERSION"]
           image = f"registry.strategio.dev/{os.environ['GITHUB_REPOSITORY'].lower()}:{version}"
 
