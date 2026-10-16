@@ -1,6 +1,6 @@
 # Strategio workflows
 
-Reusable GitHub Actions workflows that build images and deploy stacks to the Strategio Docker Swarm. They run on the self-hosted runners of the organization on `ops-1`, which hold the registry login and the Docker socket of a Swarm manager. The repository is private and shared with the repositories of `strategio-digital` (Settings → Actions → General → Access); repositories of other organizations can't call it.
+Reusable GitHub Actions workflows that build images and deploy stacks to the Strategio Docker Swarm. They run on the self-hosted runners of the organization on `ops-1`, which hold the registry login and the Docker socket of a Swarm manager. The repository is public, so the private repositories of `strategio-digital`, `quackpocalypse` and `documan-ai` can call it. It holds no secrets: the jobs get them from the calling repository, and they run only on the runners of our organizations, which take no public repository.
 
 ## Build
 
@@ -24,7 +24,19 @@ jobs:
     secrets: inherit
 ```
 
-Inputs: `dockerfile` (default `docker/production/Dockerfile`), `context` (default `.`) and `version`, the commit to build (default the commit of the run). A workflow that commits and then builds in the same run, like a scheduled sync, passes the new commit as `version`, because the run itself still points to the commit it started on.
+Inputs: `dockerfile` (default `docker/production/Dockerfile`), `context` (default `.`), `version`, the commit to build (default the commit of the run), and `image`, a name under the path of the repository. A workflow that commits and then builds in the same run, like a scheduled sync, passes the new commit as `version`, because the run itself still points to the commit it started on.
+
+- **Several images from one repository:** one job per image, each with its `dockerfile` and `image`. The image `web` of `documan-ai/documan-source` is `registry.strategio.dev/documan-ai/documan-source/web:<commit>`, and the compose takes it as `${IMAGE_PATH}/web:${VERSION}`.
+
+  ```yaml
+  jobs:
+    web:
+      uses: strategio-digital/workflows/.github/workflows/build.yml@v1
+      with:
+        dockerfile: docker/web/Dockerfile.web
+        image: web
+      secrets: inherit
+  ```
 
 - **Build arguments and secrets come from the repository, as the Dockerfile names them.** A repository variable named by an `ARG` becomes a build argument of the same name. A repository secret named by the `id` of a `--mount=type=secret` becomes that build secret, which only the `RUN` with the mount reads and which never lands in a layer. The rest stays out of the build, and the summary of the run lists the names it passed. Secrets need `secrets: inherit` in the caller.
 
@@ -60,7 +72,7 @@ Inputs: `version`, `compose`, `stack` (default the repository name, also under `
 
 ### What the compose gets
 
-- `IMAGE`, `VERSION`, `STACK` and `ROLE` (place services with `node.labels.role == ${ROLE}`).
+- `IMAGE` (`registry.strategio.dev/<owner>/<repo>:<commit>`), `IMAGE_PATH` (the same without the tag, for several images), `VERSION`, `STACK` and `ROLE` (place services with `node.labels.role == ${ROLE}`).
 - Every repository variable and secret, by its name, for `${…}` interpolation. Use it for configuration only: a value interpolated into `environment` ends up in the service spec, where `docker service inspect` shows it.
 
 ### Secrets
@@ -95,7 +107,7 @@ A Postgres service with the label `backup: pgbackrest` (under `deploy.labels`) a
 
 ### What the deploy checks and changes
 
-- The image of the commit must be in the registry.
+- Every image of the compose under `IMAGE_PATH` must be in the registry.
 - Refused: external volumes, external networks other than `edge`, external configs and secrets, bind mounts, `network_mode`, and names of volumes, networks, configs and secrets outside the stack prefix.
 - Every network of the stack is an overlay with MTU 1400, which the private network between the servers needs. A service without networks gets the stack's `default` network.
 - Configs and secrets from files get a name with the hash of their content, so a changed file deploys as a new config instead of failing.

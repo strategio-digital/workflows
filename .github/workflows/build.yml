@@ -15,6 +15,10 @@ on:
         description: Commit to build, empty for the commit of the run
         type: string
         default: ""
+      image:
+        description: Name of the image under the path of the repository, empty for the image of the repository itself
+        type: string
+        default: ""
     outputs:
       image:
         description: The pushed image
@@ -27,7 +31,7 @@ jobs:
   build:
     runs-on: [self-hosted, ops-1]
     concurrency:
-      group: build-${{ github.repository }}-${{ github.ref }}
+      group: build-${{ github.repository }}-${{ inputs.image }}-${{ github.ref }}
       cancel-in-progress: true
     outputs:
       image: ${{ steps.build.outputs.image }}
@@ -42,6 +46,7 @@ jobs:
           DOCKERFILE: ${{ inputs.dockerfile }}
           CONTEXT: ${{ inputs.context }}
           VERSION: ${{ inputs.version || github.sha }}
+          IMAGE_NAME: ${{ inputs.image }}
           REPO_SECRETS: ${{ toJSON(secrets) }}
           REPO_VARS: ${{ toJSON(vars) }}
         run: |
@@ -79,7 +84,13 @@ jobs:
                   check=True, stdout=subprocess.DEVNULL,
               )
 
-          image = f"registry.strategio.dev/{env['GITHUB_REPOSITORY'].lower()}:{env['VERSION']}"
+          path = f"registry.strategio.dev/{env['GITHUB_REPOSITORY'].lower()}"
+          if env["IMAGE_NAME"]:
+              if not re.fullmatch(r"[a-z0-9]+(?:[._-][a-z0-9]+)*", env["IMAGE_NAME"]):
+                  print(f"::error::the image name {env['IMAGE_NAME']} has other characters than lowercase letters, digits, dots, dashes and underscores")
+                  sys.exit(1)
+              path += f"/{env['IMAGE_NAME']}"
+          image = f"{path}:{env['VERSION']}"
           source = f"{env['GITHUB_SERVER_URL']}/{env['GITHUB_REPOSITORY']}"
           built = subprocess.run(
               ["docker", "buildx", "build", "--builder", "limited", "--pull", "--push",

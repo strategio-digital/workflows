@@ -52,7 +52,8 @@ jobs:
 
           stack = (os.environ["STACK"] or os.environ["GITHUB_REPOSITORY"].split("/", 1)[1]).lower()
           version = os.environ["VERSION"]
-          image = f"registry.strategio.dev/{os.environ['GITHUB_REPOSITORY'].lower()}:{version}"
+          path = f"registry.strategio.dev/{os.environ['GITHUB_REPOSITORY'].lower()}"
+          image = f"{path}:{version}"
 
           repository = os.environ["GITHUB_REPOSITORY"]
           env = dict(os.environ)
@@ -64,7 +65,7 @@ jobs:
               if source == "REPO_SECRETS":
                   secret_values = values
               env.update(values)
-          env.update(STACK=stack, VERSION=version, IMAGE=image)
+          env.update(STACK=stack, VERSION=version, IMAGE=image, IMAGE_PATH=path)
 
           def docker(*args, stdin=None):
               return subprocess.run(["docker", *args], input=stdin, capture_output=True, text=True)
@@ -73,9 +74,6 @@ jobs:
               owner = docker("service", "inspect", "--format", '{{index .Spec.Labels "com.strategio.repository"}}', line).stdout.strip()
               if owner not in ("", "<no value>") and owner != repository:
                   fail(f"stack {stack} belongs to {owner}; choose another stack name")
-
-          if subprocess.run(["docker", "manifest", "inspect", image], capture_output=True).returncode != 0:
-              fail(f"{image} is not in the registry; build the commit first")
 
           rendered = subprocess.run(
               ["docker", "stack", "config", "--compose-file", env["COMPOSE"]],
@@ -91,6 +89,14 @@ jobs:
 
           errors = []
           prefix = f"{stack}_"
+
+          images = sorted({
+              str(service.get("image", "")) for service in (compose.get("services") or {}).values()
+              if str(service.get("image", "")).startswith((f"{path}:", f"{path}/"))
+          })
+          for item in images:
+              if subprocess.run(["docker", "manifest", "inspect", item], capture_output=True).returncode != 0:
+                  errors.append(f"{item} is not in the registry; build the commit first")
           overlay = {"driver": "overlay", "driver_opts": {"com.docker.network.driver.mtu": "1400"}}
 
           for name, volume in (compose.get("volumes") or {}).items():
@@ -237,7 +243,8 @@ jobs:
               capture_output=True, text=True, check=True,
           ).stdout.splitlines()
 
-          summary = [f"Deployed `{image}` as stack `{stack}`.", "", "| Service | Replicas | Update |", "| --- | --- | --- |"]
+          deployed_images = ", ".join(f"`{item}`" for item in images) or "the compose"
+          summary = [f"Deployed {deployed_images} as stack `{stack}`.", "", "| Service | Replicas | Update |", "| --- | --- | --- |"]
           broken = deployed.returncode != 0
           for line in services:
               service, replicas = line.split("\t")
