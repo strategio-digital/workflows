@@ -68,6 +68,13 @@ jobs:
     secrets: inherit
 ```
 
+A repository in another organization (`documan-ai`, `quackpocalypse`) gets nothing from `secrets: inherit`, which GitHub passes only within one organization. It forwards its secrets as one secret instead, in Build and Deploy alike, and the workflow unpacks them and masks every value in the log:
+
+```yaml
+    secrets:
+      REPO_SECRETS: ${{ toJSON(secrets) }}
+```
+
 Inputs: `version`, `compose`, `stack` (default the repository name, also under `schedule`, whose event carries no repository) and `role` (default `app`).
 
 ### What the compose gets
