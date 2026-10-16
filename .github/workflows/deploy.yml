@@ -19,6 +19,10 @@ on:
         description: Value of node.labels.role the services run on, passed to the compose as ROLE
         type: string
         default: app
+    secrets:
+      REPO_SECRETS:
+        description: toJSON(secrets) of a caller in another organization, where secrets inherit passes nothing
+        required: false
 
 permissions:
   contents: read
@@ -60,7 +64,15 @@ jobs:
           secret_values = {}
           for source in ("REPO_VARS", "REPO_SECRETS"):
               values = json.loads(env.pop(source) or "{}") or {}
+              forwarded = values.pop("REPO_SECRETS", None) if source == "REPO_SECRETS" else None
+              if forwarded:
+                  values.update(json.loads(forwarded))
               values.pop("github_token", None)
+              if source == "REPO_SECRETS":
+                  for value in values.values():
+                      for line in str(value).splitlines():
+                          if line.strip():
+                              print(f"::add-mask::{line}")
               values = {key: str(value) for key, value in values.items()}
               if source == "REPO_SECRETS":
                   secret_values = values
@@ -162,6 +174,7 @@ jobs:
               service["secrets"] = mounts
           migrated = False
           dropped = set()
+          missing = set()
           for name, item in list((compose.get("secrets") or {}).items()):
               source = item.pop("x-environment", None)
               optional = item.pop("x-optional", False)
@@ -175,6 +188,7 @@ jobs:
                   continue
               if not value:
                   errors.append(f"secret {name} wants {source}, which is not a repository secret")
+                  missing.add(name)
                   continue
               secret = f"{prefix}{name}-{hashlib.sha256(value.encode()).hexdigest()[:12]}"
               if secret not in existing:
@@ -190,6 +204,8 @@ jobs:
 
           for kind in ("configs", "secrets"):
               for name, item in (compose.get(kind) or {}).items():
+                  if kind == "secrets" and name in missing:
+                      continue
                   if item.get("external"):
                       shared = kind == "secrets" and str(item.get("name", name)).startswith("shared-")
                       generated = kind == "secrets" and str(item.get("name", "")).startswith(prefix)

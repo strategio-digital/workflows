@@ -19,6 +19,10 @@ on:
         description: Name of the image under the path of the repository, empty for the image of the repository itself
         type: string
         default: ""
+    secrets:
+      REPO_SECRETS:
+        description: toJSON(secrets) of a caller in another organization, where secrets inherit passes nothing
+        required: false
     outputs:
       image:
         description: The pushed image
@@ -55,7 +59,14 @@ jobs:
           env = dict(os.environ)
           repo_vars = json.loads(env.pop("REPO_VARS") or "{}") or {}
           repo_secrets = json.loads(env.pop("REPO_SECRETS") or "{}") or {}
+          forwarded = repo_secrets.pop("REPO_SECRETS", None)
+          if forwarded:
+              repo_secrets.update(json.loads(forwarded))
           repo_secrets.pop("github_token", None)
+          for value in repo_secrets.values():
+              for line in str(value).splitlines():
+                  if line.strip():
+                      print(f"::add-mask::{line}")
 
           with open(env["DOCKERFILE"]) as dockerfile:
               text = dockerfile.read()
