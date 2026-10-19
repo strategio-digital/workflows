@@ -122,8 +122,9 @@ jobs:
           for name, network in list(networks.items()):
               network = network or {}
               if network.get("external"):
-                  if network.get("name", name) != "edge":
-                      errors.append(f"network {name} is external; only edge is allowed")
+                  external = str(network.get("name", name))
+                  if external != "edge" and not external.startswith("shared-"):
+                      errors.append(f"network {name} is external; only edge and shared- networks are allowed")
                   continue
               if "name" in network and not str(network["name"]).startswith(prefix):
                   errors.append(f"network {name} has a name outside {prefix}")

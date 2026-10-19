@@ -103,6 +103,7 @@ secrets:
 - `x-optional: true` next to `x-environment` makes the secret optional: without the repository secret, the deploy leaves it out of the stack and the variable stays unset.
 - The entrypoint above exports every file of `/run/secrets` as a variable of the same name and runs the original command. It works for any image with `sh`, so the app needs no `_FILE` support. Overriding the entrypoint drops the image's command, so the wrapper names it.
 - Secrets shared by all projects (the backup key) are created in the infra repo with the prefix `shared-` and declared as `external: true`.
+- Networks shared by several stacks (a database of several sites) are created in the infra repo with the prefix `shared-`, like `edge`, and declared as `external: true`.
 - Once a stack uses `x-environment`, the deploy fails when the value of any repository secret still appears in the rendered compose. Stacks without it get a warning.
 
 ### Backups
@@ -115,7 +116,7 @@ A Postgres service with the label `backup: pgbackrest` (under `deploy.labels`) a
 ### What the deploy checks and changes
 
 - Every image of the compose under `IMAGE_PATH` must be in the registry.
-- Refused: external volumes, external networks other than `edge`, external configs and secrets, bind mounts, `network_mode`, and names of volumes, networks, configs and secrets outside the stack prefix.
+- Refused: external volumes, external networks other than `edge` and `shared-…`, external configs and secrets, bind mounts, `network_mode`, and names of volumes, networks, configs and secrets outside the stack prefix.
 - Every network of the stack is an overlay with MTU 1400, which the private network between the servers needs. A service without networks gets the stack's `default` network.
 - Configs and secrets from files get a name with the hash of their content, so a changed file deploys as a new config instead of failing.
 - The run fails when a service rolled back or paused during this deploy, or runs fewer replicas than desired. It then prints the error and the last 60 lines of every task that ended during this deploy, at most 3 per service and without the tasks that ended with neither an error nor a line, and the last 20 of them in the summary of the run, with the values of repository secrets replaced by `***`. Give services a healthcheck and `update_config` with `failure_action: rollback`, so a broken version never replaces the running one.
