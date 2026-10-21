@@ -123,4 +123,4 @@ jobs:
                   summary.write(f"\nPassed to the build: {names}.\n")
 
       - if: always()
-        run: docker buildx prune --builder limited --force --filter until=168h --max-used-space 20GB >/dev/null
+        run: docker buildx prune --builder limited --force --max-used-space 20GB >/dev/null
