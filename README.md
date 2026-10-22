@@ -113,6 +113,13 @@ A Postgres service with the label `backup: pgbackrest` (under `deploy.labels`) a
 - the deploy sets `PGBACKREST_REPO1_PATH` to `/<stack>/<service>`, whatever the compose says, so no project writes into another project's path;
 - it mounts the latest `shared-r2-backups-access-key-id-v<n>`, `shared-r2-backups-secret-access-key-v<n>` and `shared-backups-cipher-pass-v<n>` into that service only.
 
+A service with the label `backup: sqlite` and the image `registry.strategio.dev/strategio-digital/sqlite-backup` from the infra repo backs up one SQLite database (`SQLITE_DB`) from a volume it shares with the app:
+
+- the deploy sets `BACKUP_PATH` to `/<stack>/<service>` in the same way;
+- it mounts the same three secrets as `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `BACKUP_CIPHER_PASS`.
+
+Any other value of the label `backup` fails the deploy.
+
 ### What the deploy checks and changes
 
 - Every image of the compose under `IMAGE_PATH` must be in the registry.
