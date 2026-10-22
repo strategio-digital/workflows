@@ -148,21 +148,32 @@ jobs:
               versions = [name for name in existing if re.fullmatch(rf"{base}-v\d+", name)]
               return max(versions, key=lambda name: int(name.rsplit("-v", 1)[1]), default=None)
 
-          backup_secrets = {
-              "PGBACKREST_REPO1_S3_KEY": "shared-r2-backups-access-key-id",
-              "PGBACKREST_REPO1_S3_KEY_SECRET": "shared-r2-backups-secret-access-key",
-              "PGBACKREST_REPO1_CIPHER_PASS": "shared-backups-cipher-pass",
+          backup_kinds = {
+              "pgbackrest": ("PGBACKREST_REPO1_PATH", {
+                  "PGBACKREST_REPO1_S3_KEY": "shared-r2-backups-access-key-id",
+                  "PGBACKREST_REPO1_S3_KEY_SECRET": "shared-r2-backups-secret-access-key",
+                  "PGBACKREST_REPO1_CIPHER_PASS": "shared-backups-cipher-pass",
+              }),
+              "sqlite": ("BACKUP_PATH", {
+                  "R2_ACCESS_KEY_ID": "shared-r2-backups-access-key-id",
+                  "R2_SECRET_ACCESS_KEY": "shared-r2-backups-secret-access-key",
+                  "BACKUP_CIPHER_PASS": "shared-backups-cipher-pass",
+              }),
           }
           for name, service in (compose.get("services") or {}).items():
               labels = (service.get("deploy") or {}).get("labels") or {}
               if isinstance(labels, list):
                   labels = dict(label.split("=", 1) for label in labels)
-              if labels.get("backup") != "pgbackrest":
+              if "backup" not in labels:
                   continue
+              if labels["backup"] not in backup_kinds:
+                  errors.append(f"service {name} has the label backup={labels['backup']}, known are {', '.join(backup_kinds)}")
+                  continue
+              path_variable, backup_secrets = backup_kinds[labels["backup"]]
               environment = service.get("environment") or {}
               if isinstance(environment, list):
                   environment = dict(item.split("=", 1) for item in environment)
-              environment["PGBACKREST_REPO1_PATH"] = f"/{stack}/{name}"
+              environment[path_variable] = f"/{stack}/{name}"
               service["environment"] = environment
               mounts = [mount for mount in service.get("secrets") or [] if mount.get("target") not in backup_secrets]
               for target, base in backup_secrets.items():
